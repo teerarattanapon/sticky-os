@@ -80,6 +80,19 @@
 #include "src/fonts/FreeSerifItalic24ptExt.h"
 #include "src/fonts/FreeSerifItalic32ptExt.h"
 #include "src/fonts/FreeSerifItalic40ptExt.h"
+#include "src/fonts/thai/ThaiSans9.h"
+#include "src/fonts/thai/ThaiSans12.h"
+#include "src/fonts/thai/ThaiSans18.h"
+#include "src/fonts/thai/ThaiSansBold9.h"
+#include "src/fonts/thai/ThaiSansBold12.h"
+#include "src/fonts/thai/ThaiSansBold18.h"
+#include "src/fonts/thai/ThaiSansBold24.h"
+#include "src/fonts/thai/ThaiSerif9.h"
+#include "src/fonts/thai/ThaiSerif12.h"
+#include "src/fonts/thai/ThaiSerif18.h"
+#include "src/fonts/thai/ThaiSerif24.h"
+#include "src/fonts/thai/ThaiSerif32.h"
+#include "src/fonts/thai/ThaiSerif40.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -121,6 +134,7 @@
 #include "json.h"
 #include "net.h"
 #include "notes.h"
+#include "todo.h"
 #include "photos.h"
 #include "photostore.h"
 #include "pins.h"
@@ -154,14 +168,20 @@ static const uint16_t INK = 0, PAPER = 1;  // the panel's 1 bpp format: 1 is whi
 
 // The canvas prints UTF-8: ASCII from the font itself, the other letters
 // from its extra table (glyphs.h), anything else as an ASCII stand-in.
-static const struct { const GFXfont *base; const ExtFont *ext; } FONT_EXT[] = {
-    {&FreeSans9pt7b, &FreeSans9ptExt},         {&FreeSans12pt7b, &FreeSans12ptExt},
-    {&FreeSans18pt7b, &FreeSans18ptExt},       {&FreeSansBold9pt7b, &FreeSansBold9ptExt},
-    {&FreeSansBold12pt7b, &FreeSansBold12ptExt}, {&FreeSansBold18pt7b, &FreeSansBold18ptExt},
-    {&FreeSansBold24pt7b, &FreeSansBold24ptExt}, {&FreeSerifItalic9pt7b, &FreeSerifItalic9ptExt},
-    {&FreeSerifItalic12pt7b, &FreeSerifItalic12ptExt}, {&FreeSerifItalic18pt7b, &FreeSerifItalic18ptExt},
-    {&FreeSerifItalic24pt7b, &FreeSerifItalic24ptExt}, {&FreeSerifItalic32pt7b, &FreeSerifItalic32ptExt},
-    {&FreeSerifItalic40pt7b, &FreeSerifItalic40ptExt},
+static const struct { const GFXfont *base; const ExtFont *ext, *thai; } FONT_EXT[] = {
+    {&FreeSans9pt7b, &FreeSans9ptExt, &ThaiSans9},
+    {&FreeSans12pt7b, &FreeSans12ptExt, &ThaiSans12},
+    {&FreeSans18pt7b, &FreeSans18ptExt, &ThaiSans18},
+    {&FreeSansBold9pt7b, &FreeSansBold9ptExt, &ThaiSansBold9},
+    {&FreeSansBold12pt7b, &FreeSansBold12ptExt, &ThaiSansBold12},
+    {&FreeSansBold18pt7b, &FreeSansBold18ptExt, &ThaiSansBold18},
+    {&FreeSansBold24pt7b, &FreeSansBold24ptExt, &ThaiSansBold24},
+    {&FreeSerifItalic9pt7b, &FreeSerifItalic9ptExt, &ThaiSerif9},
+    {&FreeSerifItalic12pt7b, &FreeSerifItalic12ptExt, &ThaiSerif12},
+    {&FreeSerifItalic18pt7b, &FreeSerifItalic18ptExt, &ThaiSerif18},
+    {&FreeSerifItalic24pt7b, &FreeSerifItalic24ptExt, &ThaiSerif24},
+    {&FreeSerifItalic32pt7b, &FreeSerifItalic32ptExt, &ThaiSerif32},
+    {&FreeSerifItalic40pt7b, &FreeSerifItalic40ptExt, &ThaiSerif40},
 };
 
 class TextCanvas : public GFXcanvas1 {
@@ -172,9 +192,25 @@ class TextCanvas : public GFXcanvas1 {
       if (e.base == f) return e.ext;
     return bookExtFor(f);  // the Books app's reading fonts (bookfonts.h)
   }
+  static const ExtFont *thaiFor(const GFXfont *f) {
+    for (auto &e : FONT_EXT)
+      if (e.base == f) return e.thai;
+    return bookThaiFor(f);
+  }
   const GFXfont *font() const { return gfxFont; }
+  using GFXcanvas1::write;
+  // A whole string (print() comes here): the same as byte by byte, but each
+  // character can see the one after it, which a Thai tone mark needs.
+  size_t write(const uint8_t *buf, size_t n) override {
+    for (size_t i = 0; i < n; i++) ahead = buf + i + 1, aheadLen = n - i - 1, write(buf[i]);
+    ahead = nullptr, aheadLen = 0;
+    return n;
+  }
   size_t write(uint8_t c) override {
-    if (pending == 0 && c < 0x80) return GFXcanvas1::write(c);
+    if (pending == 0 && c < 0x80) {
+      if (c != '\n') stack.base(0);  // ASCII: no Thai mark sits on it
+      return GFXcanvas1::write(c);
+    }
     if (c >= 0xC0) {  // a new character: 2, 3 or 4 bytes
       pending = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : 1;
       cp = c & (c >= 0xF0 ? 0x07 : c >= 0xE0 ? 0x0F : 0x1F);
@@ -192,18 +228,39 @@ class TextCanvas : public GFXcanvas1 {
  private:
   uint32_t cp = 0;
   uint8_t pending = 0;
+  const uint8_t *ahead = nullptr;  // what follows in the string being printed
+  size_t aheadLen = 0;
+  ThaiStack stack;
+  uint32_t nextCodePoint() const {
+    if (!ahead || !aheadLen) return 0;
+    char buf[5] = {};
+    for (size_t k = 0; k < 4 && k < aheadLen; k++) buf[k] = (char)ahead[k];
+    int i = 0;
+    return utf8Next(buf, i);
+  }
   void drawCodePoint(uint32_t code) {
-    const ExtFont *ext = gfxFont ? extFor(gfxFont) : nullptr;
-    int at = ext ? extIndex(code) : -1;
+    const ExtFont *ext = nullptr;
+    int at = -1, lift = 0;
+    int thai = gfxFont ? thaiIndex(code) : -1;
+    if (thai >= 0 && (ext = thaiFor(gfxFont))) {
+      at = thai;
+      uint32_t next = nextCodePoint();
+      lift = stack.raise(code, ext->glyph[at], next, next == 0x0E33 ? &ext->glyph[thaiIndex(0x0E33)] : nullptr, gfxFont->yAdvance);
+    } else {
+      ext = gfxFont ? extFor(gfxFont) : nullptr;
+      at = ext ? extIndex(code) : -1;
+      if (at >= 0) stack.base(-ext->glyph[at].yOffset);
+    }
     if (at < 0) {  // not in the font: a look-alike, or nothing
+      stack.base(0);
       char two[2];
       const char *f = foldCodePoint(code, two);
       for (; f && *f; f++) GFXcanvas1::write(*f);
       return;
     }
     const ExtGlyph &g = ext->glyph[at];
-    int xo = g.xOffset;
-    if (wrap && g.width && cursor_x + textsize_x * (xo + g.width) > _width) {
+    int xo = g.xOffset, yo = g.yOffset - lift;
+    if (wrap && g.width && g.xAdvance && cursor_x + textsize_x * (xo + g.width) > _width) {
       cursor_x = 0;
       cursor_y += (int16_t)textsize_y * gfxFont->yAdvance;
     }
@@ -214,8 +271,8 @@ class TextCanvas : public GFXcanvas1 {
       for (int xx = 0; xx < g.width; xx++) {
         if (!(bit++ & 7)) byte = *bits++;
         if (byte & 0x80) {
-          if (textsize_x == 1 && textsize_y == 1) writePixel(cursor_x + xo + xx, cursor_y + g.yOffset + yy, textcolor);
-          else writeFillRect(cursor_x + (xo + xx) * textsize_x, cursor_y + (g.yOffset + yy) * textsize_y, textsize_x, textsize_y, textcolor);
+          if (textsize_x == 1 && textsize_y == 1) writePixel(cursor_x + xo + xx, cursor_y + yo + yy, textcolor);
+          else writeFillRect(cursor_x + (xo + xx) * textsize_x, cursor_y + (yo + yy) * textsize_y, textsize_x, textsize_y, textcolor);
         }
         byte <<= 1;
       }
@@ -255,15 +312,15 @@ static Readings now;
 // "app <n>" uses them): a new app takes the next number, and APP_ORDER says
 // where it goes on the home screen.
 enum App { APP_CLOCK, APP_WEATHER, APP_CALENDAR, APP_NOTES, APP_TIMER, APP_PHOTOS, APP_CLAUDE, APP_SETTINGS, APP_ABOUT,
-           APP_QUOTE, APP_RECIPES, APP_GAMES, APP_BOOKS, APP_BUS, APP_COUNT };
+           APP_QUOTE, APP_RECIPES, APP_GAMES, APP_BOOKS, APP_BUS, APP_TODO, APP_COUNT };
 // English, for the log; the screens use appName().
 static const char *const APP_NAMES[] = {"Clock", "Weather", "Calendar", "Notes", "Timer", "Photos", "Claude", "Settings", "About",
-                                        "Quote", "Recipes", "Games", "Books", "Bus"};
+                                        "Quote", "Recipes", "Games", "Books", "Bus", "Todo"};
 static const StrId APP_LABELS[] = {S_APP_CLOCK, S_APP_WEATHER, S_APP_CALENDAR, S_APP_NOTES, S_APP_TIMER, S_APP_PHOTOS,
                                    S_APP_CLAUDE, S_APP_SETTINGS, S_APP_ABOUT, S_APP_QUOTE, S_APP_RECIPES, S_APP_GAMES, S_APP_BOOKS,
-                                   S_APP_BUS};
+                                   S_APP_BUS, S_APP_TODO};
 #define appName(a) T(APP_LABELS[a])  // a macro: Arduino puts its prototypes above the first function
-static const int APP_ORDER[APP_COUNT] = {APP_CLOCK, APP_WEATHER, APP_CALENDAR, APP_NOTES, APP_TIMER, APP_PHOTOS,
+static const int APP_ORDER[APP_COUNT] = {APP_CLOCK, APP_WEATHER, APP_CALENDAR, APP_NOTES, APP_TODO, APP_TIMER, APP_PHOTOS,
                                          APP_BOOKS, APP_BUS, APP_QUOTE, APP_RECIPES, APP_GAMES, APP_CLAUDE, APP_SETTINGS, APP_ABOUT};
 
 // What fills the screen: the home screen, an app, the quick settings over
@@ -908,7 +965,7 @@ static int wantedRotation() {
 // Where the ink of `s` ends, from x = 0 (as Adafruit's getTextBounds: x + w),
 // UTF-8 aware: the extra letters measured from their own table.
 static int textW(const GFXfont *font, const char *s) {
-  const ExtFont *ext = TextCanvas::extFor(font);
+  const ExtFont *ext = TextCanvas::extFor(font), *thai = TextCanvas::thaiFor(font);
   int x = 0, minX = INT16_MAX, maxX = INT16_MIN;
   auto glyph = [&](int w, int h, int xo, int adv) {
     if (w > 0 && h > 0) minX = min(minX, x + xo), maxX = max(maxX, x + xo + w - 1);
@@ -917,6 +974,12 @@ static int textW(const GFXfont *font, const char *s) {
   char two[2];
   for (int i = 0; s[i];) {
     uint32_t cp = utf8Next(s, i);
+    int t = thai ? thaiIndex(cp) : -1;
+    if (t >= 0) {
+      const ExtGlyph &g = thai->glyph[t];
+      glyph(g.width, g.height, g.xOffset, g.xAdvance);
+      continue;
+    }
     int at = ext && cp >= 0x80 ? extIndex(cp) : -1;
     if (at >= 0) {
       const ExtGlyph &g = ext->glyph[at];
@@ -2646,6 +2709,120 @@ static void drawNotes(const char *busy = nullptr) {
   }
 }
 
+// ---------------------------------------------------------------- todo
+
+static bool todoTyping;      // the keyboard is up for a new item
+static int todoPage;
+static int todoArmed = -1;   // the item whose Delete pill is showing; -1: none
+static String todoSay;       // the bottom line: what just happened; empty: the hint
+static int todoRowItem[16];  // which item each row shows, -1: none
+static const int TODO_PILL_W = 110;
+
+static int todoStripY() { return NOTE_TOP + NOTE_ROWS * NOTE_ROW + 4; }
+static bool onTodoAdd(int x, int y) { return x > W - 2 * MIC_R - 34 && y > todoStripY() - 6; }
+static int todoClearX() { return W - 2 * MIC_R - 44 - 150; }  // the Clear done pill's left edge
+static bool onTodoClear(int x, int y) { return x >= todoClearX() && x <= W - 2 * MIC_R - 40 && y > todoStripY() - 6; }
+
+static void drawTodo() {
+  if (todoTyping) return keyboardDraw(noteKb, BODY_Y + 4);
+  std::vector<TodoItem> &items = todoItems();
+  std::vector<int> order = todoOrder();
+  for (int &r : todoRowItem) r = -1;
+  int pages = max(1, ((int)order.size() + NOTE_ROWS - 1) / NOTE_ROWS);
+  if (todoPage >= pages) todoPage = 0;
+  if (order.empty()) textCentre(W / 2, H / 2 - 30, &FreeSansBold18pt7b, T(S_TODO_EMPTY));
+  for (int row = 0; row < NOTE_ROWS; row++) {
+    int at = todoPage * NOTE_ROWS + row;
+    if (at >= (int)order.size()) break;
+    const TodoItem &it = items[order[at]];
+    todoRowItem[row] = order[at];
+    int y = NOTE_TOP + row * NOTE_ROW;
+    checkBox(30, y + 8, it.done);
+    const GFXfont *font = it.done ? &FreeSans12pt7b : &FreeSansBold12pt7b;
+    bool armed = todoArmed == order[at];
+    int room = W - 106 - (armed ? TODO_PILL_W + 10 : 0);
+    String shown = fitted(font, it.text, room);
+    text(76, y + 31, font, shown.c_str());
+    if (it.done) canvas->drawFastHLine(76, y + 23, textW(font, shown.c_str()), INK);
+    if (armed) notePill(W - 30 - TODO_PILL_W, y + 8, TODO_PILL_W, true, T(S_NOTE_DELETE));
+    if (row < NOTE_ROWS - 1) canvas->drawFastHLine(76, y + NOTE_ROW - 1, W - 106, INK);
+  }
+
+  // The bottom strip: what happened, the page, Clear done, and + (type a new one).
+  int stripY = todoStripY(), cy = stripY + (H - stripY) / 2;
+  canvas->drawFastHLine(30, stripY, W - 60, INK);
+  canvas->drawCircle(W - MIC_R - 24, cy, MIC_R, INK);
+  canvas->drawCircle(W - MIC_R - 24, cy, MIC_R - 1, INK);
+  canvas->fillRect(W - MIC_R - 24 - 11, cy - 2, 22, 5, INK);
+  canvas->fillRect(W - MIC_R - 24 - 2, cy - 11, 5, 22, INK);
+  int textRightEdge = W - 2 * MIC_R - 54;
+  if ((int)order.size() > todoOpenCount()) {
+    notePill(todoClearX(), cy - 15, 150, false, T(S_TODO_CLEAR_DONE));
+    textRightEdge = todoClearX() - 14;
+  }
+  if (pages > 1) {
+    char page[24];
+    snprintf(page, sizeof page, "%d / %d", todoPage + 1, pages);
+    textRight(textRightEdge, stripY + 34, &FreeSans12pt7b, page);
+    textRightEdge -= textW(&FreeSans12pt7b, page) + 16;
+  }
+  String said = todoSay.length() ? todoSay : String(T(S_TODO_HINT));
+  text(30, stripY + 34, &FreeSans9pt7b, fitted(&FreeSans9pt7b, said, textRightEdge - 30).c_str());
+}
+
+static void todoTypeStart() {
+  keyboardBegin(noteKb, "", T(S_TODO_TYPE), T(S_TODO_TYPE_HINT), 200);
+  todoTyping = true;
+  todoArmed = -1;
+  render(false);
+}
+
+static void todoTypeResult(int r) {
+  if (r == KB_CHANGED) return redrawSoon();
+  if (r == KB_CANCEL) {
+    todoTyping = false;
+    if (notesPending() && notesKind() == JOB_DICTATE) notesCancel();  // dictation nobody wants now
+    return render(false);
+  }
+  if (r != KB_DONE) return;
+  if (notesBusy() && notesKind() == JOB_DICTATE) {  // the spoken words are still on their way
+    noteKb.note = T(S_KB_STILL_SPEECH);
+    return render(false);
+  }
+  todoTyping = false;
+  String typed = noteKb.text;
+  typed.trim();
+  if (typed.length()) {
+    todoSay = T(todoAdd(typed) ? S_TODO_ADDED : S_TODO_FULL);
+    todoPage = 0;
+  }
+  render(false);
+}
+
+static void todoTap(int x, int y) {
+  if (todoTyping) return todoTypeResult(keyboardTap(noteKb, x, y));
+  if (onTodoAdd(x, y)) return todoTypeStart();
+  if (onTodoClear(x, y) && (int)todoItems().size() > todoOpenCount()) {
+    int n = todoClearDone();
+    char line[48];
+    snprintf(line, sizeof line, T(S_TODO_CLEARED), n);
+    todoSay = line, todoArmed = -1;
+    return render(false);
+  }
+  if (y >= NOTE_TOP && y < NOTE_TOP + NOTE_ROWS * NOTE_ROW) {
+    int item = todoRowItem[(y - NOTE_TOP) / NOTE_ROW];
+    if (item < 0) todoArmed = -1;
+    else if (x < 70) todoToggle(item), todoArmed = -1, todoSay = "";  // the tick box
+    else if (todoArmed == item && x >= W - 40 - TODO_PILL_W) {    // its Delete pill
+      todoDelete(item);
+      todoArmed = -1;
+      todoSay = T(S_NOTE_DELETED);
+    } else todoArmed = todoArmed == item ? -1 : item;  // the words: show (or hide) Delete
+    return render(false);
+  }
+  if (todoArmed >= 0) todoArmed = -1, render(false);
+}
+
 // ---------------------------------------------------------------- settings and about
 
 // Everything the board knows about itself, as label and value pairs.
@@ -2744,6 +2921,7 @@ static void ring(int cx, int cy, int r, int t) {
 static void appIcon(int a, int cx, int cy, int s);
 static bool appShown(int a);
 static std::vector<int> homeApps();
+static bool appShown(int a);
 static void openApp(int next);
 
 enum SetIcon { SI_ROTATION, SI_TEMPERATURE, SI_SOUND, SI_SLEEP, SI_WIFI, SI_APPS, SI_ABOUT, SI_SETUP, SI_ADD, SI_UPDATE, SI_CHECK, SI_LANGUAGE };
@@ -3124,7 +3302,9 @@ static std::vector<ListRow> settingsRows() {
   else utf8Copy(v, T(S_NOT_CONNECTED), sizeof v);
   add(ROW_LINK, SP_WIFI, SI_WIFI, T(S_SET_WIFI), v);
   add(ROW_HEADER, -1, -1, T(S_SET_APPS), "");
-  snprintf(v, sizeof v, T(S_APPS_SHOWN), (int)homeApps().size(), APP_COUNT);
+  int shown = 0;
+  for (int a : APP_ORDER) shown += appShown(a);
+  snprintf(v, sizeof v, T(S_APPS_SHOWN), shown, APP_COUNT);
   add(ROW_LINK, SP_APPS, SI_APPS, T(S_HOME_SCREEN), v);
   add(ROW_SWITCH, 104, 100 + APP_QUOTE, T(S_QUOTES_ONLINE), T(cfg::flag("quotes.online") ? S_QUOTES_ON : S_QUOTES_OFF), cfg::flag("quotes.online"));
   add(ROW_SWITCH, 105, 100 + APP_GAMES, T(S_GAMES_AI), T(cfg::flag("games.ai") ? S_GAMES_AI_ON : S_GAMES_AI_OFF), cfg::flag("games.ai"));
@@ -3547,6 +3727,13 @@ static void appIcon(int a, int cx, int cy, int s) {
       break;
     }
     case APP_RECIPES: chefHat(cx, cy, s, t); break;
+    case APP_TODO: {  // one big tick box, ticked
+      int x = cx - r + 2, y = cy - r + 2, w = s - 4;
+      for (int k = 0; k < t; k++) canvas->drawRoundRect(x + k, y + k, w - 2 * k, w - 2 * k, 10 - min(k, 8), INK);
+      thickLine(x + w * 24 / 100, y + w * 52 / 100, x + w * 43 / 100, y + w * 72 / 100, t);
+      thickLine(x + w * 43 / 100, y + w * 72 / 100, x + w * 78 / 100, y + w * 28 / 100, t);
+      break;
+    }
     case APP_GAMES: gamesFolderIcon(cx, cy, s * 135 / 100); break;  // a folder: four of its games, small
     case APP_BOOKS: booksIcon(cx, cy, s); break;
     case APP_BUS: busIcon(cx, cy, s, t); break;
@@ -3575,6 +3762,7 @@ static void badge(int cx, int cy, int number) {
 
 static int appBadge(int a) {
   if (a == APP_NOTES) return openTasks();
+  if (a == APP_TODO) return todoOpenCount();
   if (a == APP_TIMER && timerRunning) return (timerSecondsLeft() + 59) / 60;
   return 0;
 }
@@ -3586,11 +3774,44 @@ static int homeFocus;  // which of the shown apps has the ring (UP / DOWN / OK)
 
 static bool appShown(int a) { return a == APP_SETTINGS || !(settings.hidden & (1u << a)); }
 
+// The home screen keeps a few apps; the rest sit behind More, a second grid
+// in the same place. APP_MORE is that tile: not an app, so not in APP_ORDER.
+static const int APP_MORE = APP_COUNT;
+static const int HOME_MAIN[] = {APP_NOTES, APP_TODO, APP_BOOKS, APP_WEATHER, APP_PHOTOS, APP_CLAUDE, APP_SETTINGS};
+static bool homeMore;  // the More grid is showing
+
+static bool onMainHome(int a) {
+  for (int m : HOME_MAIN)
+    if (m == a) return true;
+  return false;
+}
+
 static std::vector<int> homeApps() {
   std::vector<int> out;
+  if (!homeMore) {
+    for (int a : HOME_MAIN)
+      if (appShown(a)) out.push_back(a);
+    out.push_back(APP_MORE);
+    return out;
+  }
   for (int a : APP_ORDER)
-    if (appShown(a)) out.push_back(a);
+    if (!onMainHome(a) && appShown(a)) out.push_back(a);
   return out;
+}
+
+// More: three rows of dots, as a grid of apps.
+static void moreIcon(int cx, int cy, int s) {
+  int step = s * 34 / 100, r = max(4, s / 11);
+  for (int i = -1; i <= 1; i++)
+    for (int j = -1; j <= 1; j++) canvas->fillCircle(cx + i * step, cy + j * step, r, INK);
+}
+
+static void homeShowMore(bool more) {
+  homeMore = more;
+  homeTop = 0, homeFocus = 0;
+  screen = SCREEN_HOME;
+  Serial.println(more ? "screen: more" : "screen: home");
+  render(false);
 }
 
 static HomeLayout homeLayout() {
@@ -3682,7 +3903,12 @@ static void drawHomeWidget() {
 
 static void drawHome() {
   homeKeepInView();
-  drawHomeWidget();
+  if (homeMore) {  // a title and the way back where the widget sits
+    HomeLayout W0 = homeLayout();
+    text(24, BODY_Y + 56, &FreeSansBold24pt7b, T(S_HOME_MORE));
+    text(24, BODY_Y + 92, &FreeSans12pt7b, T(S_HOME_MORE_BACK));
+    canvas->drawFastHLine(16, W0.gridTop - 6, W - 32, INK);
+  } else drawHomeWidget();
   HomeLayout L = homeLayout();
   auto apps = homeApps();
   const int TILE = 92;
@@ -3692,10 +3918,11 @@ static void drawHome() {
     int cx = x + w / 2, ty = y + 12;
     canvas->drawRoundRect(cx - TILE / 2, ty, TILE, TILE, 22, INK);
     canvas->drawRoundRect(cx - TILE / 2 + 1, ty + 1, TILE - 2, TILE - 2, 21, INK);
-    appIcon(apps[i], cx, ty + TILE / 2, 54);
-    int b = appBadge(apps[i]);
+    if (apps[i] == APP_MORE) moreIcon(cx, ty + TILE / 2, 54);
+    else appIcon(apps[i], cx, ty + TILE / 2, 54);
+    int b = apps[i] == APP_MORE ? 0 : appBadge(apps[i]);
     if (b) badge(cx + TILE / 2 - 6, ty + 6, b);
-    String label = fitted(&FreeSans12pt7b, appName(apps[i]), w - 8);
+    String label = fitted(&FreeSans12pt7b, apps[i] == APP_MORE ? T(S_HOME_MORE) : appName(apps[i]), w - 8);
     textCentre(cx, ty + TILE + 30, &FreeSans12pt7b, label.c_str());
     if (i == homeFocus)  // the ring UP / DOWN moves and OK opens
       for (int k = 0; k < 3; k++) canvas->drawRoundRect(cx - TILE / 2 - 7 - k, ty - 7 - k, TILE + 14 + 2 * k, TILE + 14 + 2 * k, 28, INK);
@@ -3720,12 +3947,15 @@ static void goHome() {
   screen = SCREEN_HOME;
   noteOpen = -1;
   notesTyping = false;
+  todoTyping = false, todoArmed = -1, todoSay = "";
   wifiTyping = false;
   calMode = CM_VIEW;
   settingsPage = SP_MAIN, listPage = 0;
   hourlyDate = 0;
   if (recipeMode == RM_TYPING) recipeMode = RM_LIST;
   gamesLeave();
+  homeMore = !onMainHome(app) && app != APP_CLOCK && app != APP_CALENDAR;  // back to the grid it was opened from (the widget opens these two)
+  homeTop = 0, homeFocus = 0;
   auto apps = homeApps();
   for (int i = 0; i < (int)apps.size(); i++)
     if (apps[i] == app) homeFocus = i;
@@ -3755,6 +3985,7 @@ static void homeMove(int move) {
 
 static void homeTap(int x, int y) {
   HomeLayout L = homeLayout();
+  if (y < L.gridTop - 6 && homeMore) return homeShowMore(false);  // More's title: back
   if (y < L.gridTop - 6) {  // the widget: the part tapped opens its app
     if (TALL) openApp(y < BODY_Y + 106 ? APP_CLOCK : y < BODY_Y + 176 ? APP_WEATHER : APP_CALENDAR);
     else openApp(x < W / 2 ? APP_CLOCK : y < BODY_Y + 84 ? APP_WEATHER : APP_CALENDAR);
@@ -3765,6 +3996,7 @@ static void homeTap(int x, int y) {
     int cx, cy, w, h;
     if (homeCell(i, cx, cy, w, h) && x >= cx && x < cx + w && y >= cy && y < cy + h) {
       homeFocus = i;
+      if (apps[i] == APP_MORE) return homeShowMore(true);
       return openApp(apps[i]);
     }
   }
@@ -4604,7 +4836,7 @@ static int voiceCardState(const char *&hint) {
   }
   if (listenHint) return hint = listenHint, 1;
   if (screen != SCREEN_APP || setupMode || updScreen || !notesPending()) return 0;
-  bool typing = (app == APP_NOTES && notesTyping) || (app == APP_RECIPES && recipeMode == RM_TYPING) || app == APP_GAMES;
+  bool typing = (app == APP_NOTES && notesTyping) || (app == APP_TODO && todoTyping) || (app == APP_RECIPES && recipeMode == RM_TYPING) || app == APP_GAMES;
   if (notesKind() == JOB_DICTATE) return typing ? (hint = T(S_TURNING_SPEECH), 2) : 0;
   if (app == APP_NOTES && noteJobPending() && !notesTyping && noteOpen < 0) return hint = T(S_TAP_TO_CANCEL), 2;
   if (app == APP_RECIPES && recipeMode == RM_LIST && recipeThinking()) return hint = T(S_WRITING_RECIPE_HINT), 2;
@@ -5217,6 +5449,7 @@ static void render(bool full) {
     case APP_BUS: xSemaphoreTake(dataLock, portMAX_DELAY); drawBus(); xSemaphoreGive(dataLock); break;
     case APP_CALENDAR: xSemaphoreTake(dataLock, portMAX_DELAY); drawCalendar(); xSemaphoreGive(dataLock); break;
     case APP_NOTES: drawNotes(); break;
+    case APP_TODO: drawTodo(); break;
     case APP_SETTINGS: drawSettings(); break;
     case APP_TIMER: drawTimer(); break;
     case APP_ABOUT: xSemaphoreTake(dataLock, portMAX_DELAY); drawAbout(); xSemaphoreGive(dataLock); break;
@@ -5838,7 +6071,8 @@ static void notesPoll() {
   bool recipeTyping = screen == SCREEN_APP && app == APP_RECIPES && recipeMode == RM_TYPING;  // the same keyboard
   bool gameTyping = screen == SCREEN_APP && app == APP_GAMES && gamesTyping();
   if (kind == JOB_DICTATE) {
-    if (!notesTyping && !recipeTyping && !gameTyping) return;  // the keyboard has gone: the words aren't wanted
+    bool todoTypingNow = screen == SCREEN_APP && app == APP_TODO && todoTyping;
+    if (!notesTyping && !recipeTyping && !gameTyping && !todoTypingNow) return;  // the keyboard has gone: the words aren't wanted
     if (say.length()) noteKb.note = say;
     else {
       if (noteKb.text.length() && !noteKb.text.endsWith(" ")) noteKb.text += " ";
@@ -5852,7 +6086,7 @@ static void notesPoll() {
     notesPage = 0;
   }
   if (serialVoice) Serial.printf("voice: %s\n", say.c_str()), serialVoice = false;
-  if (screen == SCREEN_APP && (app == APP_NOTES || (app == APP_RECIPES && recipeTyping) || gameTyping)) render(false);
+  if (screen == SCREEN_APP && (app == APP_NOTES || app == APP_TODO || (app == APP_RECIPES && recipeTyping) || gameTyping)) render(false);
 }
 
 // Cancel: a tap on the strip, or OK, while it's thinking.
@@ -5898,6 +6132,7 @@ static void openApp(int next) {
   screen = SCREEN_APP;
   noteOpen = -1;
   notesTyping = false;
+  todoTyping = false, todoArmed = -1, todoSay = "";
   wifiTyping = false;
   settingsPage = SP_MAIN, listPage = 0;
   app = (next + APP_COUNT) % APP_COUNT;
@@ -5936,6 +6171,12 @@ static void swipe(int x0, int y0, int dx, int dy) {
   if (app == APP_WEATHER && hourlyDate) return hourlySwipe(dx, dy);  // a day's hours: sideways the next day
   if (app == APP_RECIPES && recipesSwipe(dx, dy)) return;
   if (app == APP_NOTES && notesTyping) return;            // typing: a sloppy tap mustn't change app
+  if (app == APP_TODO && todoTyping) return;
+  if (app == APP_TODO && vertical) {  // up and down turn the page
+    todoPage = max(0, todoPage + (dy < 0 ? 1 : -1)), todoArmed = -1;
+    render(false);
+    return;
+  }
   if (app == APP_SETTINGS && (wifiTyping || wifiJoining)) return;
   if (app == APP_NOTES && noteOpen >= 0) {  // one item open: sideways steps through them, down closes it
     if (!vertical) noteStep(dx > 0 ? 1 : -1);
@@ -5972,7 +6213,7 @@ static void action() {  // OK, or a tap in the middle of the screen
   if (screen == SCREEN_QUICK) return closeQuick();
   if (screen == SCREEN_HOME) {
     auto apps = homeApps();
-    if (homeFocus < (int)apps.size()) openApp(apps[homeFocus]);
+    if (homeFocus < (int)apps.size()) apps[homeFocus] == APP_MORE ? homeShowMore(true) : openApp(apps[homeFocus]);
     return;
   }
   Serial.printf("app: action in %s\n", APP_NAMES[app]);
@@ -6002,6 +6243,12 @@ static void action() {  // OK, or a tap in the middle of the screen
     return;
   }
   if (app == APP_NOTES && notesTyping) return typedNoteResult(KB_DONE);  // OK: Done
+  if (app == APP_TODO && todoTyping) return todoTypeResult(KB_DONE);
+  if (app == APP_TODO) {  // next page
+    todoPage++, todoArmed = -1;
+    render(false);
+    return;
+  }
   if (app == APP_NOTES && noteJobPending()) return notesStop();  // OK: Cancel while it's thinking
   if (app == APP_NOTES && noteOpen >= 0) {  // one item open: OK goes back to the list
     noteOpen = -1;
@@ -6080,6 +6327,7 @@ static void tap(int x, int y) {
   if (app == APP_BUS) return busTap(x, y);
   if (app == APP_RECIPES) return recipesTap(x, y);
   if (app == APP_GAMES) return gamesTap(x, y);
+  if (app == APP_TODO) return todoTap(x, y);
   if (app == APP_NOTES && notesTyping) return typedNoteTap(x, y);
   if (app == APP_NOTES && noteOpen < 0 && noteJobPending()) return notesStop();  // the Thinking card says "tap to cancel"
   if (app == APP_NOTES && noteOpen < 0 && onMicButton(x, y)) {
@@ -6108,6 +6356,7 @@ static void setDemo(bool on) {
   active = demoMode = on;
   netDemo = on;
   notesDemo(on);
+  todoDemo(on);
   recipesDemo(on);
   gamesDemo(on);
   busDemo(on);
@@ -6598,6 +6847,7 @@ void setup() {
     show(true);
   }
   notesBegin();  // mounts LittleFS
+  todoBegin();
   recipesBegin();
   gamesBegin();
   gamesUiBegin();

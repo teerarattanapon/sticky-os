@@ -19,7 +19,9 @@
 // - Text is valid UTF-8 with no bytes below 0x20 other than the ones above;
 //   spaces are single, and a block neither starts nor ends with one.
 //   U+00A0 (no-break space) and U+00AD (soft hyphen: a place a word may be
-//   broken) pass through.
+//   broken) pass through. U+200B (zero-width space) is a place a line may
+//   end with nothing drawn: the writer puts one between Thai words
+//   (thaiwords.h), which are written without spaces.
 // - FL_PAGE: this block starts a new page (a chapter's first block).
 // - FL_RULE: a break in the text ("* * *", <hr>); the block has no inline.
 // - FL_ITEM: a list item; the text carries its own number ("1. ") if it had
@@ -36,8 +38,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string>
+#include <vector>
 
-static const int FLOW_VERSION = 1;
+static const int FLOW_VERSION = 2;  // 2: U+200B between Thai words
 
 enum : uint8_t {
   FL_H1 = 0x01,
@@ -109,6 +112,8 @@ class FlowWriter {
   void putByte(uint8_t b);
   void flushPending();
   void codePoint(uint32_t cp);
+  void emit(uint32_t cp);
+  void flushThai();
   void startIfNeeded();
   FILE *flow_ = nullptr, *toc_ = nullptr;
   uint32_t written_ = 0, textBytes_ = 0;
@@ -119,6 +124,7 @@ class FlowWriter {
   bool wantItalic_ = false, wantBold_ = false;
   int breaks_ = 0;           // line breaks waiting for the text after them
   BlockKind kind_ = BK_PARA;
+  std::vector<uint32_t> thai_;  // a run of Thai waiting for its word breaks
   uint32_t cp_ = 0;          // a UTF-8 character split between two text() calls
   int need_ = 0, have_ = 0;
   std::string tocTitle_[TOC_PENDING_MAX];  // entries waiting for their block

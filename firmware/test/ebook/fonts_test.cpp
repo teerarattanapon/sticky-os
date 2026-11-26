@@ -65,6 +65,12 @@ struct CanvasModel {
     }
   }
   void drawCodePoint(uint32_t code) {
+    // Thai comes from the font's own Thai table, with or without an extra one.
+    int thai = thaiIndex(code);
+    if (const ExtFont *t = thai >= 0 ? bookThaiFor(gfxFont) : nullptr) {
+      cursor_x += t->glyph[thai].xAdvance;
+      return;
+    }
     int at = ext ? extIndex(code) : -1;
     if (at < 0) {
       char two[2];

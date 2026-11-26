@@ -2,6 +2,7 @@
 firmware/sticky-os/build/
 firmware/test/ebook/build/
 firmware/test/bus/build/
+firmware/test/todo/build/
 site/dist/
 node_modules/
 *.bin

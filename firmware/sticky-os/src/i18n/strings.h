@@ -24,6 +24,17 @@ S(S_APP_QUOTE, "Quote")
 S(S_APP_RECIPES, "Recipes")
 S(S_APP_GAMES, "Games")
 S(S_APP_BOOKS, "Books")
+S(S_APP_TODO, "Todo")
+S(S_HOME_MORE, "More")  // the home screen tile holding the other apps, and that grid's title
+S(S_HOME_MORE_BACK, "Tap here to go back")  // under the More title, 12pt
+S(S_TODO_EMPTY, "Nothing to do")  // bold 18pt, centred
+S(S_TODO_HINT, "Tap + to add, a box to tick it off.")  // the line at the bottom, 9pt
+S(S_TODO_TYPE, "New to-do")  // above the keyboard, bold 12pt
+S(S_TODO_TYPE_HINT, "What needs doing?")  // the empty field
+S(S_TODO_ADDED, "Added.")
+S(S_TODO_FULL, "The list is full: clear some done ones.")
+S(S_TODO_CLEAR_DONE, "Clear done")  // pill, ~150 px, bold 9pt
+S(S_TODO_CLEARED, "Cleared %d done.")
 S(S_TURN_AUTO, "Automatic")  // screen rotation choices
 S(S_TURN_LANDSCAPE, "Landscape")
 S(S_TURN_LANDSCAPE_FLIPPED, "Landscape, flipped")

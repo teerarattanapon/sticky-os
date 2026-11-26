@@ -21,6 +21,7 @@
 #include <string>
 
 #include "bookflow.h"
+#include "thaiwords.h"
 
 namespace {
 
@@ -564,6 +565,11 @@ bool BookPager::Impl::buildLine(Cur &c, uint32_t limit, BookPage &pg, bool first
         off += len;
         continue;
       }
+      if (cp == 0x200B) {  // a zero-width space (between Thai words): a place to break, nothing to print
+        if (wordChars && !pendW) remember(off + len, false);
+        off += len;
+        continue;
+      }
       if (cp == 0xAD) {  // a soft hyphen: a place to break if a "-" still fits
         int hw = adv(role, '-');
         if (wordChars && !pendW && x + hw <= avail) remember(off + len, true);
@@ -572,7 +578,7 @@ bool BookPager::Impl::buildLine(Cur &c, uint32_t limit, BookPage &pg, bool first
       }
     }
     int a = adv(role, cp);
-    if (!a) {  // the font hasn't got it
+    if (!a && !isThaiMark(cp)) {  // the font hasn't got it (a Thai mark has no width of its own)
       off += len;
       continue;
     }
