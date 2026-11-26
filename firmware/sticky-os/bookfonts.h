@@ -60,6 +60,7 @@ const BookFont *bookHeadingFont(int size, int level);
 // TextCanvas::extFor() in the sketch asks this for the fonts it doesn't list.
 const BookFont *bookFontOf(const GFXfont *base);  // nullptr: not a book font
 const ExtFont *bookExtFor(const GFXfont *base);   // nullptr: not a book font
+const ExtFont *bookThaiFor(const GFXfont *base);  // its Thai table (glyphs.h, thaiIndex); nullptr: not a book font
 
 // How far one character moves the cursor, exactly as the firmware's canvas
 // prints it (TextCanvas in sticky-os.ino) and textW() measures it: ASCII from

@@ -35,6 +35,27 @@ jobs:
         run: ./upload.sh build
       - name: Size
         run: ls -l firmware/sticky-os/build/*.bin
+      # Fork only, for trying a branch on a board: the image to flash at 0x0.
+      - name: Firmware image
+        run: |
+          set -euo pipefail
+          B=firmware/sticky-os/build
+          mkdir -p dist
+          ESPTOOL=$(find ~/.arduino15/packages/esp32/tools/esptool_py -name esptool -type f | head -1)
+          "$ESPTOOL" --chip esp32s3 merge-bin -o dist/sticky-os-full.bin \
+            --flash-mode keep --flash-freq keep --flash-size keep \
+            0x0 "$B/sticky-os.ino.bootloader.bin" \
+            0x8000 "$B/sticky-os.ino.partitions.bin" \
+            0xe000 "$B/boot_app0.bin" \
+            0x10000 "$B/sticky-os.ino.bin"
+          cp "$B/sticky-os.ino.bin" dist/sticky-os.bin
+          (cd dist && sha256sum *.bin > SHA256SUMS)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sticky-os-firmware
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
 
   site:
     runs-on: ubuntu-latest
