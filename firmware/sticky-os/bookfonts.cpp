@@ -38,6 +38,22 @@
 #include "src/fonts/BookSerifBoldItalic16.h"
 #include "src/fonts/BookSerifBoldItalic18.h"
 #include "src/fonts/BookSerifBoldItalic21.h"
+#include "src/fonts/thai/ThaiBook10.h"
+#include "src/fonts/thai/ThaiBook11.h"
+#include "src/fonts/thai/ThaiBook12.h"
+#include "src/fonts/thai/ThaiBook14.h"
+#include "src/fonts/thai/ThaiBook16.h"
+#include "src/fonts/thai/ThaiBook18.h"
+#include "src/fonts/thai/ThaiBook21.h"
+#include "src/fonts/thai/ThaiBookBold10.h"
+#include "src/fonts/thai/ThaiBookBold11.h"
+#include "src/fonts/thai/ThaiBookBold12.h"
+#include "src/fonts/thai/ThaiBookBold14.h"
+#include "src/fonts/thai/ThaiBookBold16.h"
+#include "src/fonts/thai/ThaiBookBold18.h"
+#include "src/fonts/thai/ThaiBookBold21.h"
+#include "src/fonts/thai/ThaiBookBold24.h"
+#include "src/fonts/thai/ThaiBookBold28.h"
 
 // [text size][style]
 static const BookFont *const BODY[BOOK_SIZES][4] = {
@@ -58,6 +74,18 @@ static const BookFont *const BOLD[] = {&BookSerifBold10Font, &BookSerifBold11Fon
                                        &BookSerifBold21Font, &BookSerifBold24Font, &BookSerifBold28Font};
 // [level - 1][text size]: an index into BOLD.
 static const uint8_t HEADING[3][BOOK_SIZES] = {{3, 4, 5, 6, 7, 8, 8}, {2, 3, 4, 5, 6, 7, 7}, {0, 1, 3, 4, 5, 6, 6}};
+
+// Each reading font's Thai (Noto Serif Thai): italic takes the regular, bold italic the bold.
+static const struct { const BookFont *font; const ExtFont *thai; } THAI[] = {
+    {&BookSerif10Font, &ThaiBook10}, {&BookSerifItalic10Font, &ThaiBook10}, {&BookSerifBold10Font, &ThaiBookBold10}, {&BookSerifBoldItalic10Font, &ThaiBookBold10},
+    {&BookSerif11Font, &ThaiBook11}, {&BookSerifItalic11Font, &ThaiBook11}, {&BookSerifBold11Font, &ThaiBookBold11}, {&BookSerifBoldItalic11Font, &ThaiBookBold11},
+    {&BookSerif12Font, &ThaiBook12}, {&BookSerifItalic12Font, &ThaiBook12}, {&BookSerifBold12Font, &ThaiBookBold12}, {&BookSerifBoldItalic12Font, &ThaiBookBold12},
+    {&BookSerif14Font, &ThaiBook14}, {&BookSerifItalic14Font, &ThaiBook14}, {&BookSerifBold14Font, &ThaiBookBold14}, {&BookSerifBoldItalic14Font, &ThaiBookBold14},
+    {&BookSerif16Font, &ThaiBook16}, {&BookSerifItalic16Font, &ThaiBook16}, {&BookSerifBold16Font, &ThaiBookBold16}, {&BookSerifBoldItalic16Font, &ThaiBookBold16},
+    {&BookSerif18Font, &ThaiBook18}, {&BookSerifItalic18Font, &ThaiBook18}, {&BookSerifBold18Font, &ThaiBookBold18}, {&BookSerifBoldItalic18Font, &ThaiBookBold18},
+    {&BookSerif21Font, &ThaiBook21}, {&BookSerifItalic21Font, &ThaiBook21}, {&BookSerifBold21Font, &ThaiBookBold21}, {&BookSerifBoldItalic21Font, &ThaiBookBold21},
+    {&BookSerifBold24Font, &ThaiBookBold24}, {&BookSerifBold28Font, &ThaiBookBold28},
+};
 
 static int clampSize(int size) { return size < 0 ? 0 : size >= BOOK_SIZES ? BOOK_SIZES - 1 : size; }
 
@@ -82,12 +110,23 @@ const ExtFont *bookExtFor(const GFXfont *base) {
   return f ? f->ext : nullptr;
 }
 
+const ExtFont *bookThaiFor(const GFXfont *base) {
+  for (auto &t : THAI)
+    if (t.font->base == base) return t.thai;
+  return nullptr;
+}
+
 // Adafruit_GFX::write() for a custom font: a character outside the font's
 // run doesn't move the cursor.
 static int asciiAdvance(const GFXfont *base, uint8_t c) { return c < base->first || c > base->last ? 0 : base->glyph[c - base->first].xAdvance; }
 
 int bookAdvance(const GFXfont *base, const ExtFont *ext, uint32_t cp) {
   if (cp < 0x80) return asciiAdvance(base, (uint8_t)cp);
+  int thai = thaiIndex(cp);
+  if (thai >= 0) {
+    const ExtFont *t = bookThaiFor(base);
+    return t ? t->glyph[thai].xAdvance : 0;
+  }
   int at = ext ? extIndex(cp) : -1;
   if (at >= 0) return ext->glyph[at].xAdvance;
   char two[2];

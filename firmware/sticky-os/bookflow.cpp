@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "psalloc.h"
+#include "thaiwords.h"
 
 static const size_t FLOW_BUF = 8192;
 
@@ -85,13 +86,32 @@ void FlowWriter::flushPending() {
 
 void FlowWriter::codePoint(uint32_t cp) {
   if (cp == ' ' || cp == '\t' || cp == '\n' || cp == '\r' || cp == '\f' || cp == 0x2028 || cp == 0x2029) {
+    flushThai();
     space_ = true;
     return;
   }
   if (cp < 0x20 || cp == 0x7F || (cp >= 0x80 && cp < 0xA0) || cp == 0xFEFF) return;  // controls, a byte order mark
   if (cp == 0xAD && (!started_ || space_ || breaks_)) return;  // a soft hyphen with no word before it
+  if (isThai(cp)) {
+    // A run is one style: a change of style (or a break) ends it.
+    if (!thai_.empty() && (wantItalic_ != italic_ || wantBold_ != bold_ || breaks_)) flushThai();
+    if (thai_.empty()) {
+      if (!open_) beginBlock(BK_PARA);
+      flushPending();
+    }
+    // A run with no space in it for pages on end: broken in pieces, so the
+    // memory the search takes stays small.
+    if (thai_.size() >= 1024 && !isThaiMark(cp)) flushThai();
+    thai_.push_back(cp);
+    return;
+  }
+  flushThai();
   if (!open_) beginBlock(BK_PARA);
   flushPending();
+  emit(cp);
+}
+
+void FlowWriter::emit(uint32_t cp) {
   char out[4];
   int n;
   if (cp < 0x80) out[0] = cp, n = 1;
@@ -100,6 +120,22 @@ void FlowWriter::codePoint(uint32_t cp) {
   else out[0] = 0xF0 | cp >> 18, out[1] = 0x80 | (cp >> 12 & 0x3F), out[2] = 0x80 | (cp >> 6 & 0x3F), out[3] = 0x80 | (cp & 0x3F), n = 4;
   put(out, n);
   textBytes_ += n;
+}
+
+// Writes the Thai run waiting, with a U+200B at each place between two words.
+// Not before ๆ (repeat) or ฯ (abbreviation): they belong to the word before.
+void FlowWriter::flushThai() {
+  if (thai_.empty()) return;
+  std::vector<size_t> breaks = thaiBreaks(thai_);
+  size_t b = 0;
+  for (size_t i = 0; i < thai_.size(); i++) {
+    if (b < breaks.size() && breaks[b] == i) {
+      b++;
+      if (thai_[i] != 0x0E46 && thai_[i] != 0x0E2F) emit(0x200B);
+    }
+    emit(thai_[i]);
+  }
+  thai_.clear();
 }
 
 void FlowWriter::text(const char *utf8) { text(utf8, strlen(utf8)); }
@@ -138,6 +174,7 @@ void FlowWriter::beginBlock(BlockKind kind) {
 
 void FlowWriter::endBlock() {
   if (need_) need_ = 0, codePoint(0xFFFD);  // a character cut off at the block's end
+  flushThai();
   if (open_ && started_) {
     if (italic_) putByte(FL_ITALIC_OFF);
     if (bold_) putByte(FL_BOLD_OFF);
@@ -157,6 +194,7 @@ void FlowWriter::bold(bool on) { wantBold_ = on; }
 
 void FlowWriter::lineBreak() {
   if (need_) need_ = 0, codePoint(0xFFFD);
+  flushThai();
   if (open_ && started_ && breaks_ < 2) breaks_++;
   space_ = false;
 }
@@ -203,7 +241,10 @@ void FlowWriter::tocDropPending() {
   nPending_ = 0;
 }
 
-uint32_t FlowWriter::offset() const { return written_; }
+uint32_t FlowWriter::offset() const {
+  const_cast<FlowWriter *>(this)->flushThai();  // the Thai waiting comes before the next block
+  return written_;
+}
 
 bool FlowWriter::close() {
   if (!flow_) return false;

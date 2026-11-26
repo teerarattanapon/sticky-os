@@ -80,6 +80,19 @@
 #include "src/fonts/FreeSerifItalic24ptExt.h"
 #include "src/fonts/FreeSerifItalic32ptExt.h"
 #include "src/fonts/FreeSerifItalic40ptExt.h"
+#include "src/fonts/thai/ThaiSans9.h"
+#include "src/fonts/thai/ThaiSans12.h"
+#include "src/fonts/thai/ThaiSans18.h"
+#include "src/fonts/thai/ThaiSansBold9.h"
+#include "src/fonts/thai/ThaiSansBold12.h"
+#include "src/fonts/thai/ThaiSansBold18.h"
+#include "src/fonts/thai/ThaiSansBold24.h"
+#include "src/fonts/thai/ThaiSerif9.h"
+#include "src/fonts/thai/ThaiSerif12.h"
+#include "src/fonts/thai/ThaiSerif18.h"
+#include "src/fonts/thai/ThaiSerif24.h"
+#include "src/fonts/thai/ThaiSerif32.h"
+#include "src/fonts/thai/ThaiSerif40.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -154,14 +167,20 @@ static const uint16_t INK = 0, PAPER = 1;  // the panel's 1 bpp format: 1 is whi
 
 // The canvas prints UTF-8: ASCII from the font itself, the other letters
 // from its extra table (glyphs.h), anything else as an ASCII stand-in.
-static const struct { const GFXfont *base; const ExtFont *ext; } FONT_EXT[] = {
-    {&FreeSans9pt7b, &FreeSans9ptExt},         {&FreeSans12pt7b, &FreeSans12ptExt},
-    {&FreeSans18pt7b, &FreeSans18ptExt},       {&FreeSansBold9pt7b, &FreeSansBold9ptExt},
-    {&FreeSansBold12pt7b, &FreeSansBold12ptExt}, {&FreeSansBold18pt7b, &FreeSansBold18ptExt},
-    {&FreeSansBold24pt7b, &FreeSansBold24ptExt}, {&FreeSerifItalic9pt7b, &FreeSerifItalic9ptExt},
-    {&FreeSerifItalic12pt7b, &FreeSerifItalic12ptExt}, {&FreeSerifItalic18pt7b, &FreeSerifItalic18ptExt},
-    {&FreeSerifItalic24pt7b, &FreeSerifItalic24ptExt}, {&FreeSerifItalic32pt7b, &FreeSerifItalic32ptExt},
-    {&FreeSerifItalic40pt7b, &FreeSerifItalic40ptExt},
+static const struct { const GFXfont *base; const ExtFont *ext, *thai; } FONT_EXT[] = {
+    {&FreeSans9pt7b, &FreeSans9ptExt, &ThaiSans9},
+    {&FreeSans12pt7b, &FreeSans12ptExt, &ThaiSans12},
+    {&FreeSans18pt7b, &FreeSans18ptExt, &ThaiSans18},
+    {&FreeSansBold9pt7b, &FreeSansBold9ptExt, &ThaiSansBold9},
+    {&FreeSansBold12pt7b, &FreeSansBold12ptExt, &ThaiSansBold12},
+    {&FreeSansBold18pt7b, &FreeSansBold18ptExt, &ThaiSansBold18},
+    {&FreeSansBold24pt7b, &FreeSansBold24ptExt, &ThaiSansBold24},
+    {&FreeSerifItalic9pt7b, &FreeSerifItalic9ptExt, &ThaiSerif9},
+    {&FreeSerifItalic12pt7b, &FreeSerifItalic12ptExt, &ThaiSerif12},
+    {&FreeSerifItalic18pt7b, &FreeSerifItalic18ptExt, &ThaiSerif18},
+    {&FreeSerifItalic24pt7b, &FreeSerifItalic24ptExt, &ThaiSerif24},
+    {&FreeSerifItalic32pt7b, &FreeSerifItalic32ptExt, &ThaiSerif32},
+    {&FreeSerifItalic40pt7b, &FreeSerifItalic40ptExt, &ThaiSerif40},
 };
 
 class TextCanvas : public GFXcanvas1 {
@@ -172,9 +191,25 @@ class TextCanvas : public GFXcanvas1 {
       if (e.base == f) return e.ext;
     return bookExtFor(f);  // the Books app's reading fonts (bookfonts.h)
   }
+  static const ExtFont *thaiFor(const GFXfont *f) {
+    for (auto &e : FONT_EXT)
+      if (e.base == f) return e.thai;
+    return bookThaiFor(f);
+  }
   const GFXfont *font() const { return gfxFont; }
+  using GFXcanvas1::write;
+  // A whole string (print() comes here): the same as byte by byte, but each
+  // character can see the one after it, which a Thai tone mark needs.
+  size_t write(const uint8_t *buf, size_t n) override {
+    for (size_t i = 0; i < n; i++) ahead = buf + i + 1, aheadLen = n - i - 1, write(buf[i]);
+    ahead = nullptr, aheadLen = 0;
+    return n;
+  }
   size_t write(uint8_t c) override {
-    if (pending == 0 && c < 0x80) return GFXcanvas1::write(c);
+    if (pending == 0 && c < 0x80) {
+      if (c != '\n') stack.base(0);  // ASCII: no Thai mark sits on it
+      return GFXcanvas1::write(c);
+    }
     if (c >= 0xC0) {  // a new character: 2, 3 or 4 bytes
       pending = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : 1;
       cp = c & (c >= 0xF0 ? 0x07 : c >= 0xE0 ? 0x0F : 0x1F);
@@ -192,18 +227,39 @@ class TextCanvas : public GFXcanvas1 {
  private:
   uint32_t cp = 0;
   uint8_t pending = 0;
+  const uint8_t *ahead = nullptr;  // what follows in the string being printed
+  size_t aheadLen = 0;
+  ThaiStack stack;
+  uint32_t nextCodePoint() const {
+    if (!ahead || !aheadLen) return 0;
+    char buf[5] = {};
+    for (size_t k = 0; k < 4 && k < aheadLen; k++) buf[k] = (char)ahead[k];
+    int i = 0;
+    return utf8Next(buf, i);
+  }
   void drawCodePoint(uint32_t code) {
-    const ExtFont *ext = gfxFont ? extFor(gfxFont) : nullptr;
-    int at = ext ? extIndex(code) : -1;
+    const ExtFont *ext = nullptr;
+    int at = -1, lift = 0;
+    int thai = gfxFont ? thaiIndex(code) : -1;
+    if (thai >= 0 && (ext = thaiFor(gfxFont))) {
+      at = thai;
+      uint32_t next = nextCodePoint();
+      lift = stack.raise(code, ext->glyph[at], next, next == 0x0E33 ? &ext->glyph[thaiIndex(0x0E33)] : nullptr, gfxFont->yAdvance);
+    } else {
+      ext = gfxFont ? extFor(gfxFont) : nullptr;
+      at = ext ? extIndex(code) : -1;
+      if (at >= 0) stack.base(-ext->glyph[at].yOffset);
+    }
     if (at < 0) {  // not in the font: a look-alike, or nothing
+      stack.base(0);
       char two[2];
       const char *f = foldCodePoint(code, two);
       for (; f && *f; f++) GFXcanvas1::write(*f);
       return;
     }
     const ExtGlyph &g = ext->glyph[at];
-    int xo = g.xOffset;
-    if (wrap && g.width && cursor_x + textsize_x * (xo + g.width) > _width) {
+    int xo = g.xOffset, yo = g.yOffset - lift;
+    if (wrap && g.width && g.xAdvance && cursor_x + textsize_x * (xo + g.width) > _width) {
       cursor_x = 0;
       cursor_y += (int16_t)textsize_y * gfxFont->yAdvance;
     }
@@ -214,8 +270,8 @@ class TextCanvas : public GFXcanvas1 {
       for (int xx = 0; xx < g.width; xx++) {
         if (!(bit++ & 7)) byte = *bits++;
         if (byte & 0x80) {
-          if (textsize_x == 1 && textsize_y == 1) writePixel(cursor_x + xo + xx, cursor_y + g.yOffset + yy, textcolor);
-          else writeFillRect(cursor_x + (xo + xx) * textsize_x, cursor_y + (g.yOffset + yy) * textsize_y, textsize_x, textsize_y, textcolor);
+          if (textsize_x == 1 && textsize_y == 1) writePixel(cursor_x + xo + xx, cursor_y + yo + yy, textcolor);
+          else writeFillRect(cursor_x + (xo + xx) * textsize_x, cursor_y + (yo + yy) * textsize_y, textsize_x, textsize_y, textcolor);
         }
         byte <<= 1;
       }
@@ -908,7 +964,7 @@ static int wantedRotation() {
 // Where the ink of `s` ends, from x = 0 (as Adafruit's getTextBounds: x + w),
 // UTF-8 aware: the extra letters measured from their own table.
 static int textW(const GFXfont *font, const char *s) {
-  const ExtFont *ext = TextCanvas::extFor(font);
+  const ExtFont *ext = TextCanvas::extFor(font), *thai = TextCanvas::thaiFor(font);
   int x = 0, minX = INT16_MAX, maxX = INT16_MIN;
   auto glyph = [&](int w, int h, int xo, int adv) {
     if (w > 0 && h > 0) minX = min(minX, x + xo), maxX = max(maxX, x + xo + w - 1);
@@ -917,6 +973,12 @@ static int textW(const GFXfont *font, const char *s) {
   char two[2];
   for (int i = 0; s[i];) {
     uint32_t cp = utf8Next(s, i);
+    int t = thai ? thaiIndex(cp) : -1;
+    if (t >= 0) {
+      const ExtGlyph &g = thai->glyph[t];
+      glyph(g.width, g.height, g.xOffset, g.xAdvance);
+      continue;
+    }
     int at = ext && cp >= 0x80 ? extIndex(cp) : -1;
     if (at >= 0) {
       const ExtGlyph &g = ext->glyph[at];

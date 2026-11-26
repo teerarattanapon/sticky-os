@@ -4,7 +4,7 @@
 #   ./run.sh page lib        only page_test.cpp and lib_test.cpp
 #   BOOKS_DIR=~/books ./run.sh    also against real books in that folder (each test picks what it reads)
 # Every *_test.cpp here is a program of its own, built with all of the
-# firmware's book code (firmware/sticky-os/book*.cpp, ebook.cpp, glyphs.cpp;
+# firmware's book code (firmware/sticky-os/book*.cpp, ebook.cpp, glyphs.cpp, thaiwords.cpp;
 # shim/ stands in for Arduino.h and the GFX font types). A test gets
 # the fixtures folder as its first argument and exits 0 when it passed.
 set -euo pipefail
@@ -20,7 +20,7 @@ if ! echo '#include <new>' | "$CXX" -std=c++17 -x c++ -fsyntax-only - 2>/dev/nul
 fi
 # The firmware's book code, built once into objects shared by the tests.
 objs=()
-for f in "$SRC"/book*.cpp "$SRC"/ebook.cpp "$SRC"/glyphs.cpp; do
+for f in "$SRC"/book*.cpp "$SRC"/ebook.cpp "$SRC"/glyphs.cpp "$SRC"/thaiwords.cpp; do
   o=build/$(basename "$f" .cpp).o
   if [ ! -e "$o" ] || [ "$f" -nt "$o" ] || [ -n "$(find "$SRC" -maxdepth 1 -name '*.h' -newer "$o" | head -1)" ]; then
     "$CXX" "${FLAGS[@]}" -c -o "$o" "$f"

@@ -15,7 +15,27 @@ int extIndex(uint32_t cp) {
   return -1;
 }
 
-bool drawable(uint32_t cp) { return (cp >= 0x20 && cp < 0x7F) || extIndex(cp) >= 0; }
+bool drawable(uint32_t cp) { return (cp >= 0x20 && cp < 0x7F) || extIndex(cp) >= 0 || thaiIndex(cp) >= 0; }
+
+int ThaiStack::raise(uint32_t cp, const ExtGlyph &g, uint32_t next, const ExtGlyph *saraAm, int lineH) {
+  bool upper = cp == 0x0E31 || (cp >= 0x0E34 && cp <= 0x0E37) || (cp >= 0x0E47 && cp <= 0x0E4E);
+  if (!upper) {
+    if (!(cp >= 0x0E38 && cp <= 0x0E3A)) base(-g.yOffset);  // below-base marks leave the stack alone
+    return 0;
+  }
+  bool tone = (cp >= 0x0E48 && cp <= 0x0E4C) || cp == 0x0E4E;  // the second level: tone marks, thanthakhat, yamakkan
+  int top = -g.yOffset, bottom = top - g.height, lift = 0;
+  if (tone) {
+    if (!hasUpper && next == 0x0E33 && saraAm) upperTop = -saraAm->yOffset, hasUpper = true;
+    int gap = lineH / 16 > 1 ? lineH / 16 : 1;
+    int floor = hasUpper ? upperTop + gap : baseTop + 1;
+    if (bottom < floor) lift = floor - bottom;
+  }
+  top += lift;
+  upperTop = hasUpper && upperTop > top ? upperTop : top;
+  hasUpper = true;
+  return lift;
+}
 
 const char *foldCodePoint(uint32_t cp, char *two) {
   // Latin-1 letters 0xC0..0xFF, their plain letter; Latin Extended-A 0x100..0x17F.

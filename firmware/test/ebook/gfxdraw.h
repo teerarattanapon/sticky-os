@@ -65,9 +65,22 @@ class GfxFrame {
   // x + bookTextAdvance(base, ext, utf8, len). `ext` may be nullptr.
   int drawText(int x, int y, const GFXfont *base, const ExtFont *ext, const char *utf8, int len = -1, uint8_t colour = GFX_INK) {
     char two[2];
+    const ExtFont *thai = bookThaiFor(base);
+    ThaiStack stack;
     for (int i = 0; (len < 0 || i < len) && utf8[i];) {
       uint32_t cp = utf8Next(utf8, i);
+      int t = thai ? thaiIndex(cp) : -1;
+      if (t >= 0) {  // Thai, its tone marks lifted as TextCanvas does
+        int j = i;
+        uint32_t next = (len < 0 || j < len) ? utf8Next(utf8, j) : 0;
+        const ExtGlyph &g = thai->glyph[t];
+        int lift = stack.raise(cp, g, next, next == 0x0E33 ? &thai->glyph[thaiIndex(0x0E33)] : nullptr, base->yAdvance);
+        blit(thai->bitmap + g.bitmapOffset, g.width, g.height, x + g.xOffset, y + g.yOffset - lift, colour);
+        x += g.xAdvance;
+        continue;
+      }
       int at = ext && cp >= 0x80 ? extIndex(cp) : -1;
+      stack.base(at >= 0 ? -ext->glyph[at].yOffset : 0);
       if (at >= 0) {
         const ExtGlyph &g = ext->glyph[at];
         blit(ext->bitmap + g.bitmapOffset, g.width, g.height, x + g.xOffset, y + g.yOffset, colour);
@@ -159,6 +172,16 @@ static inline int textWidth(const GFXfont *base, const ExtFont *ext, const char 
   char two[2];
   for (int i = 0; (len < 0 || i < len) && utf8[i];) {
     uint32_t cp = utf8Next(utf8, i);
+    int t = thaiIndex(cp);
+    if (const ExtFont *thai = t >= 0 ? bookThaiFor(base) : nullptr) {
+      const ExtGlyph &g = thai->glyph[t];
+      if (g.width > 0 && g.height > 0) {
+        if (x + g.xOffset < minX) minX = x + g.xOffset;
+        if (x + g.xOffset + g.width - 1 > maxX) maxX = x + g.xOffset + g.width - 1;
+      }
+      x += g.xAdvance;
+      continue;
+    }
     int at = ext && cp >= 0x80 ? extIndex(cp) : -1;
     int w, h, xo, adv;
     char one[2] = {(char)cp, 0};
